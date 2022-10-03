@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "atomate2"
 description = "atomate2 is a library of materials science workflows"
-readme = "README.md"
+readme = "README.org"
 keywords = ["high-throughput", "automated", "workflow", "dft", "vasp"]
 license = { text = "modified BSD" }
 authors = [{ name = "Alex Ganose", email = "alexganose@gmail.com" }]
