@@ -59,7 +59,7 @@ store = SETTINGS.JOB_STORE
 #automatically redirected to an alternative by maggma/pymongo
 
 #exp_dir = '.' #invoke script from experiment directory
-exp_dir = '/depot/amanndoi/data/MCHP/'
+exp_dir = '/depot/amannodi/data/MCHP_Database/'
 
 def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     """
