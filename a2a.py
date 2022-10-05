@@ -86,23 +86,21 @@ def filter_vaspaths(vaspaths:Iterable[str],
                 any(filterentry in s for filterentry in filterlist)]
     return vaspaths
 
-def assimilate_paths(vaspaths:Iterable[Union[str,Path]],
-                     filterlist=[]) -> list:
+def docs(vaspaths:Iterable[Union[str,Path]],
+         filterlist=[]) -> list:
     """
-    Use drone to create list of taskdocuments corresponding to list of
-    experiment directories.
+    Use drone to create generator of TaskDocuments corresponding
+    to list of experiment directories.
     """
-    docs = []
     pbar = tqdm(filter_vaspaths(vaspaths, filterlist),
                 desc="Processing Path()")
     for vaspath in pbar:
         pbar.set_description(f'Processing Path("{vaspath}")')
         try:
             with monty.os.cd(vaspath):
-                docs.append(drone.assimilate())
+                yield drone.assimilate()
         except Exception as e:
             print(e)
-    return docs
 
 def update_store(store:JobStore, docs:list) -> None:
     """
