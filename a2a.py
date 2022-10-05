@@ -58,7 +58,8 @@ store = SETTINGS.JOB_STORE
 #additional stores. currently, items that are too big are
 #automatically redirected to an alternative by maggma/pymongo
 
-exp_dir = '.' #invoke script from experiment directory
+#exp_dir = '.' #invoke script from experiment directory
+exp_dir = '/depot/amanndoi/data/MCHP/'
 
 def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     """
@@ -152,9 +153,8 @@ def structure_to_training_set_entry(struct:Structure,
 
 def main() -> None:
     """silly temporary main function while waiting for Geddes resource"""
-    #data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
-    data_dir = '/home/panos/MannodiGroup/DFT/parse_test'
-    Bel = ['Ca','Sr','Ba','Ge','Sn','Pb']
+    data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
+    #data_dir = '/home/panos/MannodiGroup/DFT/parse_test'
 
     write_properties_file(record="id", props=["totE,decoE,bg"],
                           fdir=data_dir, csv="id_prop_master.csv")
@@ -185,10 +185,14 @@ def main() -> None:
             # ['incar', 'kpoints', 'nkpoints', 'potcar', 'potcar_spec', 'potcar_type', 'parameters', 'lattice_rec',
             # 'structure', 'is_hubbard', 'hubbards']
             struct = calc.dict()['input']['structure'] #POSCAR
+
             prime_struct = struct.get_primitive_structure(tolerance=0.25)
             formula = Composition(struct.formula)
             prime_formula = Composition(prime_struct.formula)
             
+            #formula_dict = Composition(struct.formula).as_dict()
+            #cell_count = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
+
             formula_unit, formula_units_per_super_cell = formula.get_reduced_formula_and_factor()
             _, formula_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
             cell_count = formula_units_per_super_cell/formula_units_per_unit_cell
@@ -210,9 +214,6 @@ def main() -> None:
                 # print(step.keys())
                 # ['e_fr_energy', 'e_wo_entrp', 'e_0_energy', 'forces', 'stress', 'electronic_steps', 'structure']
                 struct = step['structure'] #XDATCAR iteration
-                # compute decomposition energy at each interval
-                formula_dict = Composition(struct.formula).as_dict()
-                count_cells = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
                 toten_pfu = step['e_fr_energy']/count_cells
                 # decoE = decomp_energy(formula_dict, toten_pfu) #from cmcl
                 decoE = -1
