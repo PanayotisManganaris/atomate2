@@ -132,8 +132,7 @@ def make_record_name(doc, calc, step)->str:
               ord('.'):None}
     dt=calc.dict()['completed_at']
     dt = str(dt).translate(ttable)
-    metadata = str(calc.dict()['dir_name'])
-    record_name = f"{formula}_{LoT}_{step}_{dt},{metadata}"
+    record_name = f"{formula}_{LoT}_{step}_{dt}"
     return record_name
 
 def write_properties_file(record:str, props:list,
@@ -187,9 +186,10 @@ def parallel_parsing(doc, fdir, csv):
         bg = calc.dict()['output']['bandgap']
         # predictions on POSCARs should predict CONTCAR energies
         record_name = make_record_name(doc, calc, "POSCAR")
+        metadata = str(calc.dict()['dir_name'])
         structure_to_training_set_entry(struct,
                                         record_name,
-                                        props=[float(toten_pfu), decoE, bg],
+                                        props=[metadata, float(toten_pfu), decoE, bg],
                                         fdir=fdir,
                                         csv=csv)
         
@@ -213,7 +213,7 @@ def parallel_parsing(doc, fdir, csv):
             record_name = make_record_name(doc, calc, count+1)
             structure_to_training_set_entry(struct,
                                             record_name,
-                                            props=[toten_pfu, decoE, bg],
+                                            props=[metadata, toten_pfu, decoE, bg],
                                             fdir=fdir,
                                             csv=csv)
 
