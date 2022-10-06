@@ -9,14 +9,17 @@ Objective: backfill database with legacy experiments
      - difference between workflow schema and output schema?
    - upload to database
 """
+import os
+import sys
+import monty
+from pathlib import Path
+
+sys.path.append(os.path.expanduser('/home/pmangana/src/cmcl/'))
+from cmcl.data.decom_calcs import decomp_calc
 
 from atomate2.vasp.drones import VaspDrone
 from pymatgen.core import Structure, Composition
 from jobflow import JobStore, SETTINGS
-
-import os
-import monty
-from pathlib import Path
 
 from tqdm import tqdm
 from itertools import chain, zip_longest
@@ -64,7 +67,7 @@ store = SETTINGS.JOB_STORE
 #automatically redirected to an alternative by maggma/pymongo
 
 #exp_dir = '.' #invoke script from experiment directory
-exp_dir = '/depot/amannodi/data/MCHP_Database/MAPbI_3/V_X'
+exp_dir = '/depot/amannodi/data/MCHP_Database/'
 
 def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     """
@@ -164,7 +167,6 @@ def parallel_parsing(doc, fdir, csv):
     """
     Pool().map over iterable of task documents to process in parallel
     """
-    print("I'm there")
     for calc in doc.calcs_reversed:
         struct = calc.dict()['input']['structure'] #POSCAR
  
@@ -186,7 +188,7 @@ def parallel_parsing(doc, fdir, csv):
         bg = calc.dict()['output']['bandgap']
         # predictions on POSCARs should predict CONTCAR energies
         record_name = make_record_name(doc, calc, "POSCAR")
-        metadata = str(calc.dict()['dir_name'])
+        metadata = str(calc.dict()['dir_name']) #notice this isn't actually needed in a proper db system
         structure_to_training_set_entry(struct,
                                         record_name,
                                         props=[metadata, float(toten_pfu), decoE, bg],
@@ -280,7 +282,6 @@ def main() -> None:
     docs = doc_gen(get_vasp_paths(exp_dir), filterlist=fl)
     pp = partial(parallel_parsing, fdir=data_dir, csv=csv)
     for group in grouper(docs, NCORE):
-        print("I'm here")
         with Pool(processes=NCORE) as p:
             results = collections.deque(
                 p.imap_unordered(pp, [i for i in group if i is not None]),
