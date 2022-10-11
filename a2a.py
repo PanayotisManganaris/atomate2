@@ -10,12 +10,12 @@ Objective: backfill database with legacy experiments
    - upload to database
 """
 import os
-import sys
+import traceback
+import time
 import monty
 from pathlib import Path
 
-sys.path.append(os.path.expanduser('/home/pmangana/src/cmcl/'))
-from cmcl.data.decom_calcs import decomp_calc
+from cmcl.codomain.compute_stability import compute_decomposition_energy
 
 from atomate2.vasp.drones import VaspDrone
 from pymatgen.core import Structure, Composition
@@ -52,12 +52,7 @@ task_document_kwargs = {
 
 drone = VaspDrone(**task_document_kwargs)
 
-#TODO: compute real targets, bandgap and decoE
-#TODO: also get total energy
-#TODO: build training set directory
 #TODO: split necessary functions off to separate script in that directory (using queries)
-#TODO: improve key gen
-#TODO: use existing decoE computations to derive decoE of intermediates
 #TODO: move all environments to depot/apps (quick one)
 #TODO: make metadata function to call on directories for use with update_store
 
@@ -65,9 +60,6 @@ store = SETTINGS.JOB_STORE
 #look into defining save/load mapping to direct document items to
 #additional stores. currently, items that are too big are
 #automatically redirected to an alternative by maggma/pymongo
-
-#exp_dir = '.' #invoke script from experiment directory
-exp_dir = '/depot/amannodi/data/MCHP_Database/'
 
 def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     """
@@ -127,33 +119,27 @@ def make_record_name(doc, calc, step)->str:
     unique id made of:
     formula + LoT + step
     """
-    formula=doc.dict()['formula_pretty']
-    LoT=calc.dict()['run_type']
+    formula = doc.dict()['formula_pretty']
+    LoT = cald['run_type']
     ttable = {ord('-'):None,
               ord(' '):None,
               ord(':'):None,
               ord('.'):None}
-    dt=calc.dict()['completed_at']
+    dt = cald['completed_at']
     dt = str(dt).translate(ttable)
-    record_name = f"{formula}_{LoT}_{step}_{dt}"
-    return record_name
+    return f"{formula}_{LoT}_{step}_{dt}"
 
-def write_properties_file(record:str, props:list,
-                          fdir:Union[str,Path]='.',
-                          csv:str='id_prop.csv') -> None:
+def make_properties_entry(record:str, props:list) -> None:
     """
     write a cgcnn-compliant training target file
     """
-    csv_path=os.path.join(fdir, csv)
     props=','.join(map(str,props))
-    with open(csv_path, 'a') as f:
-        f.write(f"{record},{props}\n")
+    return f"{record},{props}"
 
 def structure_to_training_set_entry(struct:Structure,
                                     record:str,
                                     props:list,
-                                    fdir:Union[str,Path],
-                                    csv:str='id_prop.csv') -> None:
+                                    fdir:Union[str,Path]) -> None:
     """
     write a structure to a POSCAR named record in directory fdir
     
@@ -212,12 +198,14 @@ def parallel_parsing(doc, fdir, csv):
             #                     supercell_size=True)
             # if struct.matches(POSCAR, **match_kwargs):
  
-            record_name = make_record_name(doc, calc, count+1)
-            structure_to_training_set_entry(struct,
-                                            record_name,
-                                            props=[metadata, toten_pfu, decoE, bg],
-                                            fdir=fdir,
-                                            csv=csv)
+            record_name = make_record_name(doc, cald, count+1)
+            strecords.append(
+                structure_to_training_set_entry(struct,
+                                                record_name,
+                                                props=[metadata, toten_pfu, decoE, bg],
+                                                fdir=fdir)
+                )
+    return strecords
 
 # doc.dict().keys() ['nsites', 'elements', 'nelements',
 # 'composition', 'composition_reduced',
