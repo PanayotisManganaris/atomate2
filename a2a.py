@@ -38,7 +38,7 @@ task_document_kwargs = {
     },
     #'vasp_calculation_kwargs':{
     # control which parts of a calculation are assimilated
-    'parse_dos': True,
+    'parse_dos': False,
     'parse_bandstructure': True,
     'average_locpot': True,
     # control minutia of which files are parsed and how
@@ -97,7 +97,7 @@ def worker(path, q, eq, fdir):
     try:
         with monty.os.cd(path):
             doc = drone.assimilate()
-        record_strings = make_training_data(doc, fdir, eq)
+        record_strings = make_training_data(doc, fdir)
         q.put("\n".join(record_strings))
     except Exception as e:
         eq.put(traceback.format_exc())
@@ -109,7 +109,7 @@ def gworker(subgroup, q, eq, fdir):
     place diagnostics/status checks here
     """
     for job in subgroup:
-        return worker(job, q, eq, fdir)
+        worker(job, q, eq, fdir)
 
 def update_store(store:JobStore, taskdoc) -> None:
     """
@@ -172,7 +172,7 @@ def count_unit_cells(struct:Structure)->int:
     _, f_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
     return f_unit, f_units_per_super_cell/f_units_per_unit_cell
 
-def make_training_data(doc, fdir, eq):
+def make_training_data(doc, fdir):
     """
     turn task document to cgcnn-complaint training set entry
     """
@@ -303,6 +303,7 @@ def main_parser(paths, l, p, fdir, csv, err):
     errfile = os.path.join(fdir, err)
     with open(aggrfile, 'a') as f, open(errfile, 'a') as ef:
         f.write("id,metadata,totE,decoE,bg\n")
+        f.flush()
 
         for group in grouper(grouper(paths, l), p):
             ps=[]
@@ -313,7 +314,7 @@ def main_parser(paths, l, p, fdir, csv, err):
                 p.start()
             for p in ps:
                 p.join()
-    
+
             while not q.empty():
                 f.write(str(q.get()) + '\n')
             f.flush()
@@ -331,7 +332,8 @@ if __name__ == "__main__":
     data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
     csv = "id_prop_master.csv"
     err = "duds.log"
-    fl=['LEPSILON','LOPTICS','Phonon_band_structure', 'V_A', 'V_X']
+    fl=['LEPSILON','LOPTICS','Phonon_band_structure',
+        'V_A', 'V_X', 'Band_structure']
     # LEPSILON doesn't have bands?  # get_element_spd_dos(el)[band] keyerror
     # LOPTICS doesn't have VASPrun pdos attribute
     # PH disp doesn't have electronic bands # get_element_spd_dos(el)[band] keyerror
