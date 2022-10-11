@@ -24,10 +24,10 @@ from jobflow import JobStore, SETTINGS
 from tqdm import tqdm
 from itertools import chain, zip_longest
 from functools import partial
-from multiprocessing import Pool
+import multiprocessing as mp
 import collections
 
-from typing import Any, Union
+from typing import Any, Union, List
 from collections.abc import Iterable
 
 NCORE = os.cpu_count()
@@ -76,42 +76,53 @@ def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     )
     return vaspaths
 
-def filter_vaspaths(vaspaths:Iterable[str],
-                    filterlist)->Iterable[str]:
+def filter_paths(paths:Iterable[str],
+                filterlist)->Iterable[str]:
     """
-    utility to manually narrow vaspaths to those which don't contain
+    utility to manually narrow paths to those which don't contain
     strings member to filterlist
     """
-    vaspaths = [s for s in vaspaths if not
-                any(filterentry in s for filterentry in filterlist)]
-    return vaspaths
+    paths = [s for s in paths if not
+             any(filterentry in s for filterentry in filterlist)]
+    return paths
 
-def doc_gen(vaspaths:Iterable[Union[str,Path]],
-            filterlist=[]) -> Iterable:
+def worker(path, q, eq, fdir):
     """
-    Use drone to create generator of TaskDocuments corresponding
-    to list of experiment directories.
-    """
-    pbar = tqdm(filter_vaspaths(vaspaths, filterlist),
-                desc="Processing Path()")
-    for vaspath in pbar:
-        pbar.set_description(f'Processing Path("{vaspath}")')
-        try:
-            with monty.os.cd(vaspath):
-                yield drone.assimilate()
-        except Exception as e:
-            print(e)
+    use drone to assimilate a simulation path into a task document
 
-def update_store(store:JobStore, docs:list) -> None:
+    subsequently process document
+
+    gets swallowed up in multiprocessing process
     """
-    input store and documents, connect to store, upload documents
+    try:
+        with monty.os.cd(path):
+            doc = drone.assimilate()
+        record_strings = make_training_data(doc, fdir, eq)
+        q.put("\n".join(record_strings))
+    except Exception as e:
+        eq.put(traceback.format_exc())
+
+def gworker(subgroup, q, eq, fdir):
     """
+    middleman for multiprocessing
+
+    place diagnostics/status checks here
+    """
+    for job in subgroup:
+        return worker(job, q, eq, fdir)
+
+def update_store(store:JobStore, taskdoc) -> None:
+    """
+    input store and document, connect to store, upload document
+    can be parallelized
+    """
+    #TODO: automatically collect a metadata dir including a path to
+    #experiment file? or path already collected?
     with store as s:
-        s.update(docs, key="output")
+        s.update(taskdoc, key="output")
 
 ### Additional functions to create Graph Network Training Directories
-
-def make_record_name(doc, calc, step)->str:
+def make_record_name(doc, cald:dict, step:Any)->str:
     """
     return string to uniquely identify a structure file and id_prop
     record from query info.
@@ -147,45 +158,58 @@ def structure_to_training_set_entry(struct:Structure,
     """
     filename=os.path.join(fdir, record)
     struct.to(fmt='POSCAR', filename=filename)
-    write_properties_file(record, props, fdir, csv)
+    return make_properties_entry(record, props)
 
-def parallel_parsing(doc, fdir, csv):
+def count_unit_cells(struct:Structure)->int:
+    """ compute number of unit cells in a structure """
+    prime_struct = struct.get_primitive_structure(tolerance=0.25)
+    formula = Composition(struct.formula)
+    prime_formula = Composition(prime_struct.formula)
+    #formula_dict = Composition(struct.formula).as_dict()
+    #cell_count = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
+        
+    f_unit, f_units_per_super_cell = formula.get_reduced_formula_and_factor()
+    _, f_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
+    return f_unit, f_units_per_super_cell/f_units_per_unit_cell
+
+def make_training_data(doc, fdir, eq):
     """
-    Pool().map over iterable of task documents to process in parallel
+    turn task document to cgcnn-complaint training set entry
     """
+    # f = doc.input.pseudo_potentials.functional
+    # f = f.replace("_", "")
+    strecords = []
     for calc in doc.calcs_reversed:
-        struct = calc.dict()['input']['structure'] #POSCAR
- 
-        prime_struct = struct.get_primitive_structure(tolerance=0.25)
-        formula = Composition(struct.formula)
-        prime_formula = Composition(prime_struct.formula)
-        
-        #formula_dict = Composition(struct.formula).as_dict()
-        #cell_count = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
- 
-        formula_unit, formula_units_per_super_cell = formula.get_reduced_formula_and_factor()
-        _, formula_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
-        cell_count = formula_units_per_super_cell/formula_units_per_unit_cell
- 
-        #cell_count = sum([Bnum for B,Bnum in formula.as_dict().items() if B in Bel])
-        toten_pfu = calc.dict()['output']['energy']/cell_count
-        # decoE = decomp_energy(formula_dict, toten_pfu) #from cmcl
-        decoE = -1
-        bg = calc.dict()['output']['bandgap']
+        cald = calc.dict()
+        struct = cald['input']['structure'] #POSCAR
+        fu, cell_count = count_unit_cells(struct)
+        toten_pfu = cald['output']['energy']/cell_count
+
+        runtype = cald['run_type']
+        PBE = "PBE" if "GGA" in runtype.name else False
+        HSE = "HSE" if "HSE" in runtype.name else False
+        f = HSE or PBE
+
+        metadata = str(cald['dir_name'])
+        bg = cald['output']['bandgap']
+        decoE = compute_decomposition_energy(fu, toten_pfu,
+                                             functional=f) #from cmcl
+
         # predictions on POSCARs should predict CONTCAR energies
-        record_name = make_record_name(doc, calc, "POSCAR")
-        metadata = str(calc.dict()['dir_name']) #notice this isn't actually needed in a proper db system
-        structure_to_training_set_entry(struct,
-                                        record_name,
-                                        props=[metadata, float(toten_pfu), decoE, bg],
-                                        fdir=fdir,
-                                        csv=csv)
+
+        record_name = make_record_name(doc, cald, "POSCAR")
+        strecords.append(
+            structure_to_training_set_entry(struct,
+                                            record_name,
+                                            props=[metadata, float(toten_pfu), decoE, bg],
+                                            fdir=fdir)
+            )
         
-        for count, step in enumerate(calc.dict()['output']['ionic_steps']):
+        for count, step in enumerate(cald['output']['ionic_steps']):
             struct = step['structure'] #XDATCAR iteration
             toten_pfu = step['e_fr_energy']/cell_count
-            # decoE = decomp_energy(formula_dict, toten_pfu) #from cmcl
-            decoE = -1
+            decoE = compute_decomposition_energy(fu, toten_pfu,
+                                                 functional=f) #from cmcl
             bg = "" # bg cannot be saved from intermediates in
                     # vasp runs not configured to return them at
                     # each step
@@ -240,43 +264,80 @@ def parallel_parsing(doc, fdir, csv):
 # print(step.keys()) ['e_fr_energy', 'e_wo_entrp', 'e_0_energy',
 # 'forces', 'stress', 'electronic_steps', 'structure']
 
-def grouper(iterable, n, *, incomplete='fill', fillvalue=None):
-    "Collect data into non-overlapping fixed-length chunks or blocks"
-    # grouper('ABCDEFG', 3, fillvalue='x') --> ABC DEF Gxx
-    # grouper('ABCDEFG', 3, incomplete='strict') --> ABC DEF ValueError
-    # grouper('ABCDEFG', 3, incomplete='ignore') --> ABC DEF
-    args = [iter(iterable)] * n
-    if incomplete == 'fill':
-        return zip_longest(*args, fillvalue=fillvalue)
-    if incomplete == 'strict':
-        return zip(*args, strict=True)
-    if incomplete == 'ignore':
-        return zip(*args)
-    else:
-        raise ValueError('Expected fill, strict, or ignore')
+def grouper(it:Iterable, n, fillvalue:Any=()):
+    """ extract n-size chunks of iterable """
+    args = [iter(it)] * n
+    return zip_longest(*args, fillvalue=fillvalue)
 
-def main() -> None:
-    """silly temporary main function while waiting for Geddes resource"""
+def safe_mp_write_to_file():
+    #must use Manager queue here, or will not work
+    manager = mp.Manager()
+    q = manager.Queue()    
+    pool = mp.Pool(mp.cpu_count() + 2)
+
+    #put listener to work first
+    watcher = pool.apply_async(listener, (q,))
+
+    #fire off workers
+    jobs = []
+    for i in range(80):
+        job = pool.apply_async(worker, (i, q))
+        jobs.append(job)
+
+    # collect results from the workers through the pool result queue
+    for job in jobs: 
+        job.get()
+
+    #now we are done, kill the listener
+    q.put('kill')
+    pool.close()
+    pool.join()
+
+def main_parser(paths, l, p, fdir, csv, err):
+    s = time.perf_counter()
+    manager = mp.Manager()
+    q = manager.Queue()
+    eq = manager.Queue()
+    
+    aggrfile = os.path.join(fdir, csv)
+    errfile = os.path.join(fdir, err)
+    with open(aggrfile, 'a') as f, open(errfile, 'a') as ef:
+        f.write("id,metadata,totE,decoE,bg\n")
+
+        for group in grouper(grouper(paths, l), p):
+            ps=[]
+            for g in group:
+                #print(g)
+                p = mp.Process(target=gworker, args=(g, q, eq, fdir)) 
+                ps.append(p)
+                p.start()
+            for p in ps:
+                p.join()
+    
+            while not q.empty():
+                f.write(str(q.get()) + '\n')
+            f.flush()
+
+            while not eq.empty():
+                ef.write(str(eq.get()) + '\n')
+            ef.flush()
+
+    d = time.perf_counter() - s
+    return d
+
+if __name__ == "__main__":
+    #exp_dir = '.' #invoke script from experiment directory
+    exp_dir = '/depot/amannodi/data/MCHP_Database/'
     data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
     csv = "id_prop_master.csv"
-    #data_dir = '/home/panos/MannodiGroup/DFT/parse_test'
-    write_properties_file(record="id", props=["metadata,totE,decoE,bg"],
-                          fdir=data_dir, csv=csv)
-    fl=['LEPSILON','LOPTICS','Phonon_band_structure']
+    err = "duds.log"
+    fl=['LEPSILON','LOPTICS','Phonon_band_structure', 'V_A', 'V_X']
     # LEPSILON doesn't have bands?  # get_element_spd_dos(el)[band] keyerror
     # LOPTICS doesn't have VASPrun pdos attribute
     # PH disp doesn't have electronic bands # get_element_spd_dos(el)[band] keyerror
+    paths_gen = get_vasp_paths(exp_dir)
+    paths = filter_paths(paths_gen, filterlist=fl)
 
-    docs = doc_gen(get_vasp_paths(exp_dir), filterlist=fl)
-    pp = partial(parallel_parsing, fdir=data_dir, csv=csv)
-    for group in grouper(docs, NCORE):
-        with Pool(processes=NCORE) as p:
-            results = collections.deque(
-                p.imap_unordered(pp, [i for i in group if i is not None]),
-                0)
-
-if __name__ == "__main__":
-    main()
-    # docs = doc_gen(get_vasp_paths(exp_dir),
-    #                filterlist=['LEPSILON','LOPTICS','Phonon_band_structure'])
-    # update_store(store, docs)
+    pbar = tqdm(paths, desc="Processing")
+    d = main_parser(pbar, 100, 10, data_dir, csv, err)
+    print(d)
