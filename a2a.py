@@ -38,7 +38,7 @@ task_document_kwargs = {
     },
     #'vasp_calculation_kwargs':{
     # control which parts of a calculation are assimilated
-    'parse_dos': False,
+    'parse_dos': True,
     'parse_bandstructure': True,
     'average_locpot': True,
     # control minutia of which files are parsed and how
@@ -231,39 +231,6 @@ def make_training_data(doc, fdir):
                 )
     return strecords
 
-# doc.dict().keys() ['nsites', 'elements', 'nelements',
-# 'composition', 'composition_reduced',
-# 'formula_pretty','formula_anonymous' , 'chemsys', 'volume',
-# 'density', 'density_atomic', 'symmetry', 'dir_name',
-# 'last_updated', 'completed_at', 'input', 'output',
-# 'structure', 'state', 'included_objects', 'vasp_objects',
-# 'entry', 'analysis', 'run_stats', 'orig_inputs',
-# 'task_label', 'tags', 'author', 'icsd_id', 'calcs_reversed',
-# 'transformations', 'custodian', 'additional_json'])
-
-
-# calc.dict().keys() ['dir_name', 'vasp_version',
-# 'has_vasp_completed', 'input', 'output', 'completed_at',
-# 'task_name', 'output_file_paths', 'bader', 'run_type', 'task_type',
-# 'calc_type']
-
-# calc.dict()['output'].keys() ['energy', 'energy_per_atom',
-# 'structure', 'efermi', 'is_metal', 'bandgap', 'cbm', 'vbm',
-# 'is_gap_direct', 'direct_gap', 'transition', 'mag_density',
-# 'epsilon_static', 'epsilon_static_wolfe', 'epsilon_ionic',
-# 'frequency_dependent_dielectric', 'ionic_steps', 'locpot', 'outcar',
-# 'force_constants', 'normalmode_frequencies', 'normalmode_eigenvals',
-# 'normalmode_eigenvecs', 'elph_displaced_structures',
-# 'dos_properties', 'run_stats']
-
-# calc.dict()['input'].keys() ['incar', 'kpoints', 'nkpoints',
-# 'potcar', 'potcar_spec', 'potcar_type', 'parameters', 'lattice_rec',
-# 'structure', 'is_hubbard', 'hubbards']
-
-
-# print(step.keys()) ['e_fr_energy', 'e_wo_entrp', 'e_0_energy',
-# 'forces', 'stress', 'electronic_steps', 'structure']
-
 def grouper(it:Iterable, n, fillvalue:Any=()):
     """ extract n-size chunks of iterable """
     args = [iter(it)] * n
@@ -328,8 +295,10 @@ def main_parser(paths, l, p, fdir, csv, err):
 
 if __name__ == "__main__":
     #exp_dir = '.' #invoke script from experiment directory
-    exp_dir = '/depot/amannodi/data/MCHP_Database/'
-    data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
+    #exp_dir = '/depot/amannodi/data/MCHP_Database/'
+    exp_dir = "/depot/amannodi/data/Perovs_phases_functionals/Larger_supercell_dataset/PBE_relax"
+    #data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
+    data_dir = '/depot/amannodi/data/pbe_perovskite_structures'
     csv = "id_prop_master.csv"
     err = "duds.log"
     fl=['LEPSILON','LOPTICS','Phonon_band_structure',
