@@ -9,20 +9,28 @@ Objective: backfill database with legacy experiments
      - difference between workflow schema and output schema?
    - upload to database
 """
+import os
+import traceback
+import time
+import monty
+from pathlib import Path
+
+from cmcl.codomain.compute_stability import compute_decomposition_energy
 
 from atomate2.vasp.drones import VaspDrone
 from pymatgen.core import Structure, Composition
 from jobflow import JobStore, SETTINGS
 
-import os
-import monty
-from pathlib import Path
-
 from tqdm import tqdm
-from itertools import chain
+from itertools import chain, zip_longest
+from functools import partial
+import multiprocessing as mp
+import collections
 
-from typing import Any, Union
+from typing import Any, Union, List
 from collections.abc import Iterable
+
+NCORE = os.cpu_count()
 
 task_document_kwargs = {
     'additional_fields':{# add fields for submission to database
@@ -44,12 +52,7 @@ task_document_kwargs = {
 
 drone = VaspDrone(**task_document_kwargs)
 
-#TODO: compute real targets, bandgap and decoE
-#TODO: also get total energy
-#TODO: build training set directory
 #TODO: split necessary functions off to separate script in that directory (using queries)
-#TODO: improve key gen
-#TODO: use existing decoE computations to derive decoE of intermediates
 #TODO: move all environments to depot/apps (quick one)
 #TODO: make metadata function to call on directories for use with update_store
 
@@ -57,8 +60,6 @@ store = SETTINGS.JOB_STORE
 #look into defining save/load mapping to direct document items to
 #additional stores. currently, items that are too big are
 #automatically redirected to an alternative by maggma/pymongo
-
-exp_dir = '.' #invoke script from experiment directory
 
 def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     """
@@ -75,44 +76,54 @@ def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     )
     return vaspaths
 
-def filter_vaspaths(vaspaths:Iterable[str],
-                    filterlist)->Iterable[str]:
+def filter_paths(paths:Iterable[str],
+                 filterlist)->Iterable[str]:
     """
-    utility to manually narrow vaspaths to those which don't contain
+    utility to manually narrow paths to those which don't contain
     strings member to filterlist
     """
-    vaspaths = [s for s in vaspaths if not
-                any(filterentry in s for filterentry in filterlist)]
-    return vaspaths
+    paths = [s for s in paths if not
+             any(filterentry in s for filterentry in filterlist)]
+    return paths
 
-def assimilate_paths(vaspaths:Iterable[Union[str,Path]],
-                     filterlist=[]) -> list:
+def gworker(subgroup, eq):
     """
-    Use drone to create list of taskdocuments corresponding to list of
-    experiment directories.
-    """
-    docs = []
-    pbar = tqdm(filter_vaspaths(vaspaths, filterlist),
-                desc="Processing Path()")
-    for vaspath in pbar:
-        pbar.set_description(f'Processing Path("{vaspath}")')
-        try:
-            with monty.os.cd(vaspath):
-                docs.append(drone.assimilate())
-        except Exception as e:
-            print(e)
-    return docs
+    middleman for multiprocessing
 
-def update_store(store:JobStore, docs:list) -> None:
+    place diagnostics/status checks here
     """
-    input store and documents, connect to store, upload documents
+    for job in subgroup:
+        worker(job, eq)
+
+def worker(path, eq):
     """
+    use drone to assimilate a simulation path into a task document
+
+    subsequently process document
+
+    gets swallowed up in multiprocessing process
+    """
+    try:
+        with monty.os.cd(path):
+            doc = drone.assimilate()
+        update_store(store=store, taskdoc=doc)
+        #record_strings = make_training_data(doc, fdir)
+        #q.put("\n".join(record_strings))
+    except Exception as e:
+        eq.put(traceback.format_exc())
+
+def update_store(store:JobStore, taskdoc) -> None:
+    """
+    input store and document, connect to store, upload document
+    can be parallelized
+    """
+    #TODO: automatically collect a metadata dir including a path to
+    #experiment file? or path already collected?
     with store as s:
-        s.update(docs, key="output")
+        s.update(taskdoc, key="output") 
 
 ### Additional functions to create Graph Network Training Directories
-
-def make_record_name(doc, calc, step)->str:
+def make_record_name(doc, cald:dict, step:Any)->str:
     """
     return string to uniquely identify a structure file and id_prop
     record from query info.
@@ -120,27 +131,27 @@ def make_record_name(doc, calc, step)->str:
     unique id made of:
     formula + LoT + step
     """
-    formula=doc.dict()['formula_pretty']
-    LoT=calc.dict()['run_type']
-    record_name = f"{formula}_{LoT}_{step}"
-    return record_name
+    formula = doc.dict()['formula_pretty']
+    LoT = cald['run_type']
+    ttable = {ord('-'):None,
+              ord(' '):None,
+              ord(':'):None,
+              ord('.'):None}
+    dt = cald['completed_at']
+    dt = str(dt).translate(ttable)
+    return f"{formula}_{LoT}_{step}_{dt}"
 
-def write_properties_file(record:str, props:list,
-                          fdir:Union[str,Path]='.',
-                          csv:str='id_prop.csv') -> None:
+def make_properties_entry(record:str, props:list) -> None:
     """
     write a cgcnn-compliant training target file
     """
-    csv_path=os.path.join(fdir, csv)
     props=','.join(map(str,props))
-    with open(csv_path, 'a') as f:
-        f.write(f"{record},{props}\n")
+    return f"{record},{props}"
 
 def structure_to_training_set_entry(struct:Structure,
                                     record:str,
                                     props:list,
-                                    fdir:Union[str,Path],
-                                    csv:str='id_prop.csv') -> None:
+                                    fdir:Union[str,Path]) -> None:
     """
     write a structure to a POSCAR named record in directory fdir
     
@@ -148,95 +159,178 @@ def structure_to_training_set_entry(struct:Structure,
     """
     filename=os.path.join(fdir, record)
     struct.to(fmt='POSCAR', filename=filename)
-    write_properties_file(record, props, fdir, csv)
+    return make_properties_entry(record, props)
 
-def main() -> None:
-    """silly temporary main function while waiting for Geddes resource"""
+def count_unit_cells(struct:Structure)->int:
+    """ compute number of unit cells in a structure """
+    prime_struct = struct.get_primitive_structure(tolerance=0.25)
+    formula = Composition(struct.formula)
+    prime_formula = Composition(prime_struct.formula)
+    #formula_dict = Composition(struct.formula).as_dict()
+    #cell_count = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
+        
+    f_unit, f_units_per_super_cell = formula.get_reduced_formula_and_factor()
+    _, f_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
+    return f_unit, f_units_per_super_cell/f_units_per_unit_cell
+
+def make_training_data(doc, fdir):
+    """
+    turn task document to cgcnn-complaint training set entry
+    """
+    # f = doc.input.pseudo_potentials.functional
+    # f = f.replace("_", "")
+    strecords = []
+    for calc in doc.calcs_reversed:
+        cald = calc.dict()
+        struct = cald['input']['structure'] #POSCAR
+        fu, cell_count = count_unit_cells(struct)
+        toten_pfu = cald['output']['energy']/cell_count
+
+        runtype = cald['run_type']
+        PBE = "PBE" if "GGA" in runtype.name else False
+        HSE = "HSE" if "HSE" in runtype.name else False
+        f = HSE or PBE
+
+        metadata = str(cald['dir_name'])
+        bg = cald['output']['bandgap']
+        decoE = compute_decomposition_energy(fu, toten_pfu,
+                                             functional=f) #from cmcl
+
+        # predictions on POSCARs should predict CONTCAR energies
+
+        record_name = make_record_name(doc, cald, "POSCAR")
+        strecords.append(
+            structure_to_training_set_entry(struct,
+                                            record_name,
+                                            props=[metadata, float(toten_pfu), decoE, bg],
+                                            fdir=fdir)
+            )
+        
+        for count, step in enumerate(cald['output']['ionic_steps']):
+            struct = step['structure'] #XDATCAR iteration
+            toten_pfu = step['e_fr_energy']/cell_count
+            decoE = compute_decomposition_energy(fu, toten_pfu,
+                                                 functional=f) #from cmcl
+            bg = "" # bg cannot be saved from intermediates in
+                    # vasp runs not configured to return them at
+                    # each step
+ 
+            # compare structure steps to POSCARs before saving?
+            # match_kwargs = dict(ltol=0.2,stol=0.3, angle_tol=5,
+            #                     primitive_cell=True, scale=True,
+            #                     attempt_supercell=False,
+            #                     allow_subset=False,
+            #                     supercell_size=True)
+            # if struct.matches(POSCAR, **match_kwargs):
+ 
+            record_name = make_record_name(doc, cald, count+1)
+            strecords.append(
+                structure_to_training_set_entry(struct,
+                                                record_name,
+                                                props=[metadata, toten_pfu, decoE, bg],
+                                                fdir=fdir)
+                )
+    return strecords
+
+def grouper(it:Iterable, n, fillvalue:Any=()):
+    """ extract n-size chunks of iterable """
+    args = [iter(it)] * n
+    return zip_longest(*args, fillvalue=fillvalue)
+
+def safe_mp_write_to_file():
+    #must use Manager queue here, or will not work
+    manager = mp.Manager()
+    q = manager.Queue()    
+    pool = mp.Pool(mp.cpu_count() + 2)
+
+    #put listener to work first
+    watcher = pool.apply_async(listener, (q,))
+
+    #fire off workers
+    jobs = []
+    for i in range(80):
+        job = pool.apply_async(worker, (i, q))
+        jobs.append(job)
+
+    # collect results from the workers through the pool result queue
+    for job in jobs: 
+        job.get()
+
+    #now we are done, kill the listener
+    q.put('kill')
+    pool.close()
+    pool.join()
+
+def main_parser(paths, l, p):
+    s = time.perf_counter()
+    manager = mp.Manager()
+    eq = manager.Queue()
+
+    for group in grouper(grouper(paths, l), p):
+        ps=[]
+        for g in group:
+            p = mp.Process(target=gworker, args=(g, eq)) 
+            ps.append(p)
+            p.start()
+        for p in ps:
+            p.join()
+
+    with open("./err.txt", 'a') as f:
+        while not eq.empty():
+            f.write(str(eq.get()) + '\n')
+        f.flush()
+
+    d = time.perf_counter() - s
+    return d
+
+def main_parser_old(paths, l, p, fdir, csv, err):
+    s = time.perf_counter()
+    manager = mp.Manager()
+    q = manager.Queue()
+    eq = manager.Queue()
+    
+    aggrfile = os.path.join(fdir, csv)
+    errfile = os.path.join(fdir, err)
+    with open(aggrfile, 'a') as f, open(errfile, 'a') as ef:
+        f.write("id,metadata,totE,decoE,bg\n")
+        f.flush()
+
+        for group in grouper(grouper(paths, l), p):
+            ps=[]
+            for g in group:
+                #print(g)
+                p = mp.Process(target=gworker, args=(g, q, eq, fdir)) 
+                ps.append(p)
+                p.start()
+            for p in ps:
+                p.join()
+
+            while not q.empty():
+                f.write(str(q.get()) + '\n')
+            f.flush()
+
+            while not eq.empty():
+                ef.write(str(eq.get()) + '\n')
+            ef.flush()
+
+    d = time.perf_counter() - s
+    return d
+
+if __name__ == "__main__":
+    exp_dir = '.' #invoke script from experiment directory
+    #exp_dir = '/depot/amannodi/data/MCHP_Database/'
+    #exp_dir = "/depot/amannodi/data/Perovs_phases_functionals/Larger_supercell_dataset/PBE_relax"
     #data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
-    data_dir = '/home/panos/MannodiGroup/DFT/parse_test'
-    Bel = ['Ca','Sr','Ba','Ge','Sn','Pb']
-
-    write_properties_file(record="id", props=["totE,decoE,bg"],
-                          fdir=data_dir, csv="id_prop_master.csv")
-
-    docs = assimilate_paths(get_vasp_paths(exp_dir),
-                            filterlist=['LEPSILON','LOPTICS','Phonon_band_structure'])
+    # data_dir = '/depot/amannodi/data/pbe_perovskite_structures'
+    # csv = "id_prop_master.csv"
+    # err = "duds.log"
+    fl=['LEPSILON','LOPTICS','Phonon_band_structure',
+        'V_A', 'V_X', 'Band_structure']
     # LEPSILON doesn't have bands?  # get_element_spd_dos(el)[band] keyerror
     # LOPTICS doesn't have VASPrun pdos attribute
     # PH disp doesn't have electronic bands # get_element_spd_dos(el)[band] keyerror
-    for doc in docs:
-        # doc.dict().keys()
-        # ['nsites', 'elements', 'nelements', 'composition', 'composition_reduced', 'formula_pretty','formula_anonymous'
-        # , 'chemsys', 'volume', 'density', 'density_atomic', 'symmetry', 'dir_name', 'last_updated',
-        # 'completed_at', 'input', 'output', 'structure', 'state', 'included_objects', 'vasp_objects', 'entry',
-        # 'analysis', 'run_stats', 'orig_inputs', 'task_label', 'tags', 'author', 'icsd_id', 'calcs_reversed',
-        # 'transformations', 'custodian', 'additional_json'])
-        for calc in doc.calcs_reversed:
-            # calc.dict().keys()
-            # ['dir_name', 'vasp_version', 'has_vasp_completed', 'input', 'output', 'completed_at', 'task_name',
-            # 'output_file_paths', 'bader', 'run_type', 'task_type', 'calc_type']
-            # calc.dict()['output'].keys()
-            # ['energy', 'energy_per_atom', 'structure', 'efermi', 'is_metal', 'bandgap', 'cbm', 'vbm', 'is_gap_direct',
-            # 'direct_gap', 'transition', 'mag_density', 'epsilon_static', 'epsilon_static_wolfe', 'epsilon_ionic',
-            # 'frequency_dependent_dielectric', 'ionic_steps', 'locpot', 'outcar', 'force_constants',
-            # 'normalmode_frequencies', 'normalmode_eigenvals', 'normalmode_eigenvecs', 'elph_displaced_structures',
-            # 'dos_properties', 'run_stats']
-            # calc.dict()['input'].keys()
-            # ['incar', 'kpoints', 'nkpoints', 'potcar', 'potcar_spec', 'potcar_type', 'parameters', 'lattice_rec',
-            # 'structure', 'is_hubbard', 'hubbards']
-            struct = calc.dict()['input']['structure'] #POSCAR
-            prime_struct = struct.get_primitive_structure(tolerance=0.25)
-            formula = Composition(struct.formula)
-            prime_formula = Composition(prime_struct.formula)
-            
-            formula_unit, formula_units_per_super_cell = formula.get_reduced_formula_and_factor()
-            _, formula_units_per_unit_cell = prime_formula.get_reduced_formula_and_factor()
-            cell_count = formula_units_per_super_cell/formula_units_per_unit_cell
-
-            #cell_count = sum([Bnum for B,Bnum in formula.as_dict().items() if B in Bel])
-            toten_pfu = calc.dict()['output']['energy']/cell_count
-            # decoE = decomp_energy(formula_dict, toten_pfu) #from cmcl
-            decoE = -1
-            bg = calc.dict()['output']['bandgap']
-            # predictions on POSCARs should predict CONTCAR energies
-            record_name = make_record_name(doc, calc, "POSCAR")
-            structure_to_training_set_entry(struct,
-                                            record_name,
-                                            props=[float(toten_pfu), decoE, bg],
-                                            fdir=data_dir,
-                                            csv='id_prop_master.csv')
-            
-            for count, step in enumerate(calc.dict()['output']['ionic_steps']):
-                # print(step.keys())
-                # ['e_fr_energy', 'e_wo_entrp', 'e_0_energy', 'forces', 'stress', 'electronic_steps', 'structure']
-                struct = step['structure'] #XDATCAR iteration
-                # compute decomposition energy at each interval
-                formula_dict = Composition(struct.formula).as_dict()
-                count_cells = sum([Bnum for B,Bnum in formula_dict.items() if B in Bel])
-                toten_pfu = step['e_fr_energy']/count_cells
-                # decoE = decomp_energy(formula_dict, toten_pfu) #from cmcl
-                decoE = -1
-                bg = "" # bg cannot be saved from intermediates in
-                        # vasp runs not configured to return them at
-                        # each step
-
-                # compare structure steps to POSCARs before saving?
-                # match_kwargs = dict(ltol=0.2,stol=0.3, angle_tol=5,
-                #                     primitive_cell=True, scale=True,
-                #                     attempt_supercell=False,
-                #                     allow_subset=False,
-                #                     supercell_size=True)
-                # if struct.matches(POSCAR, **match_kwargs):
-
-                record_name = make_record_name(doc, calc, count+1)
-                structure_to_training_set_entry(struct,
-                                                record_name,
-                                                props=[toten_pfu, decoE, bg],
-                                                fdir=data_dir,
-                                                csv='id_prop_master.csv')
-
-if __name__ == "__main__":
-    main()
-    # docs = assimilate_paths(get_vasp_paths(exp_dir),
-    #                         filterlist=['LEPSILON','LOPTICS','Phonon_band_structure'])
-    # update_store(store, docs)
+    paths_gen = get_vasp_paths(exp_dir)
+    paths = filter_paths(paths_gen, filterlist=fl)
+    pbar = tqdm(paths, desc="Processing")
+    d = main_parser(pbar, 1, 1)
+    print(d)
