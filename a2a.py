@@ -77,7 +77,7 @@ def get_vasp_paths(parent:Union[str,Path]) -> Iterable[str]:
     return vaspaths
 
 def filter_paths(paths:Iterable[str],
-                filterlist)->Iterable[str]:
+                 filterlist)->Iterable[str]:
     """
     utility to manually narrow paths to those which don't contain
     strings member to filterlist
@@ -86,7 +86,16 @@ def filter_paths(paths:Iterable[str],
              any(filterentry in s for filterentry in filterlist)]
     return paths
 
-def worker(path, q, eq, fdir):
+def gworker(subgroup, eq):
+    """
+    middleman for multiprocessing
+
+    place diagnostics/status checks here
+    """
+    for job in subgroup:
+        worker(job, eq)
+
+def worker(path, eq):
     """
     use drone to assimilate a simulation path into a task document
 
@@ -97,19 +106,11 @@ def worker(path, q, eq, fdir):
     try:
         with monty.os.cd(path):
             doc = drone.assimilate()
-        record_strings = make_training_data(doc, fdir)
-        q.put("\n".join(record_strings))
+        update_store(store=store, taskdoc=doc)
+        #record_strings = make_training_data(doc, fdir)
+        #q.put("\n".join(record_strings))
     except Exception as e:
         eq.put(traceback.format_exc())
-
-def gworker(subgroup, q, eq, fdir):
-    """
-    middleman for multiprocessing
-
-    place diagnostics/status checks here
-    """
-    for job in subgroup:
-        worker(job, q, eq, fdir)
 
 def update_store(store:JobStore, taskdoc) -> None:
     """
@@ -119,7 +120,7 @@ def update_store(store:JobStore, taskdoc) -> None:
     #TODO: automatically collect a metadata dir including a path to
     #experiment file? or path already collected?
     with store as s:
-        s.update(taskdoc, key="output")
+        s.update(taskdoc, key="output") 
 
 ### Additional functions to create Graph Network Training Directories
 def make_record_name(doc, cald:dict, step:Any)->str:
@@ -260,7 +261,29 @@ def safe_mp_write_to_file():
     pool.close()
     pool.join()
 
-def main_parser(paths, l, p, fdir, csv, err):
+def main_parser(paths, l, p):
+    s = time.perf_counter()
+    manager = mp.Manager()
+    eq = manager.Queue()
+
+    for group in grouper(grouper(paths, l), p):
+        ps=[]
+        for g in group:
+            p = mp.Process(target=gworker, args=(g, eq)) 
+            ps.append(p)
+            p.start()
+        for p in ps:
+            p.join()
+
+    with open("./err.txt", 'a') as f:
+        while not eq.empty():
+            f.write(str(eq.get()) + '\n')
+        f.flush()
+
+    d = time.perf_counter() - s
+    return d
+
+def main_parser_old(paths, l, p, fdir, csv, err):
     s = time.perf_counter()
     manager = mp.Manager()
     q = manager.Queue()
@@ -294,13 +317,13 @@ def main_parser(paths, l, p, fdir, csv, err):
     return d
 
 if __name__ == "__main__":
-    #exp_dir = '.' #invoke script from experiment directory
+    exp_dir = '.' #invoke script from experiment directory
     #exp_dir = '/depot/amannodi/data/MCHP_Database/'
-    exp_dir = "/depot/amannodi/data/Perovs_phases_functionals/Larger_supercell_dataset/PBE_relax"
+    #exp_dir = "/depot/amannodi/data/Perovs_phases_functionals/Larger_supercell_dataset/PBE_relax"
     #data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
-    data_dir = '/depot/amannodi/data/pbe_perovskite_structures'
-    csv = "id_prop_master.csv"
-    err = "duds.log"
+    # data_dir = '/depot/amannodi/data/pbe_perovskite_structures'
+    # csv = "id_prop_master.csv"
+    # err = "duds.log"
     fl=['LEPSILON','LOPTICS','Phonon_band_structure',
         'V_A', 'V_X', 'Band_structure']
     # LEPSILON doesn't have bands?  # get_element_spd_dos(el)[band] keyerror
@@ -308,7 +331,6 @@ if __name__ == "__main__":
     # PH disp doesn't have electronic bands # get_element_spd_dos(el)[band] keyerror
     paths_gen = get_vasp_paths(exp_dir)
     paths = filter_paths(paths_gen, filterlist=fl)
-
     pbar = tqdm(paths, desc="Processing")
-    d = main_parser(pbar, 100, 10, data_dir, csv, err)
+    d = main_parser(pbar, 1, 1)
     print(d)
