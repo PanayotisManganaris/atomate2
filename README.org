@@ -1,14 +1,16 @@
-* atomate2
 :PROPERTIES:
-:CUSTOM_ID: atomate2
+:ID:       42184ff3-99d6-45f0-975a-48c21800a24f
 :END:
 [[https://github.com/materialsproject/atomate2/actions?query=workflow%3Atesting][https://img.shields.io/github/workflow/status/materialsproject/atomate2/testing?label=tests]]
 [[https://codecov.io/gh/materialsproject/atomate2][https://img.shields.io/codecov/c/gh/materialsproject/atomate2]]
 [[https://pypi.org/project/atomate2][https://img.shields.io/pypi/v/atomate2?color=blue]]
 [[https://img.shields.io/pypi/pyversions/atomate2]]
 
+#+TITLE: atomate2
+
 *👉 [[https://materialsproject.github.io/atomate2/][Full Documentation]] 👈*
 
+* Overview
 Atomate2 is a free, open-source software for performing complex
 materials science workflows using simple Python functions. Features of
 atomate2 include
@@ -32,7 +34,7 @@ atomate2 include
 [[https://www.vasp.at][VASP]] electronic structure software, but we are
 actively working on adding more codes.
 
-** Workflows
+* Workflows
 :PROPERTIES:
 :CUSTOM_ID: workflows
 :END:
@@ -46,20 +48,25 @@ Some of the workflows available in atomate2 are:
 
 It is easy to customize and compose any of the above workflows.
 
-** Live Development Installation on Purdue Clusters
+* Installation
 :PROPERTIES:
 :CUSTOM_ID: installation
 :END:
-See 
-[[https://materialsproject.github.io/atomate2/user/install.html][installation]]
-at the documentation site for basic installation instructions.
+See [[https://materialsproject.github.io/atomate2/user/install.html][installation]] at the documentation site for basic installation
+instructions.
+** users
+Atomate2 is a Python 3.8+ library
+: pip install atomate2
+or
+: conda install atomate2
+** developers
+atomate2 has some conda dependencies. To ensure reproducibility of
+builds, development is performed within a conda virtual environment.
 
-Atomate2 is a Python 3.8+ library and can be installed using pip.
-
-However, It is dependent on pymatgen which is also in development via conda.
-
-Therefore, a2.yaml has been created to install the atomate environment
-for active development in compute clusters with the following commands:
+To ensure contributors maintain the package's reproducibility read the
+following instructions carefully.
+*** installation
+a2.lock is to be used for generating the atomate virtual environment.
 
 : git clone https://github.com/PanayotisManganaris/atomate2.git
 : cd atomate2
@@ -68,8 +75,9 @@ for active development in compute clusters with the following commands:
 : conda env update -f a2.yaml
 
 Here path is specified for a group-wide depot installation.
+*** modifying environment
 
-** Quick start
+* Quick start
 :PROPERTIES:
 :CUSTOM_ID: quick-start
 :END:
@@ -122,7 +130,7 @@ See the
 [[https://materialsproject.github.io/atomate2/user/fireworks.html][documentation]]
 for more details.
 
-** Tutorials
+* Tutorials
 :PROPERTIES:
 :CUSTOM_ID: tutorials
 :END:
@@ -136,7 +144,7 @@ information to get you started:
 - [[https://materialsproject.github.io/atomate2/user/codes/vasp.html][List
   of VASP workflows]]
 
-** Need help?
+* Need help?
 :PROPERTIES:
 :CUSTOM_ID: need-help
 :END:
@@ -145,14 +153,14 @@ Ask questions about atomate2 on the
 found an issue with atomate2, please submit a bug report on
 [[https://github.com/materialsproject/atomate2/issues][GitHub Issues]].
 
-** What's new?
+* What's new?
 :PROPERTIES:
 :CUSTOM_ID: whats-new
 :END:
 Track changes to atomate2 through the
 [[https://materialsproject.github.io/atomate2/about/changelog.html][changelog]].
 
-** Contributing
+* Contributing
 :PROPERTIES:
 :CUSTOM_ID: contributing
 :END:
@@ -162,7 +170,7 @@ Additional information on contributing to atomate2 can be found
 We maintain a list of all contributors
 [[https://materialsproject.github.io/atomate2/about/contributors.html][here]].
 
-** License
+* License
 :PROPERTIES:
 :CUSTOM_ID: license
 :END:
@@ -170,7 +178,7 @@ Atomate2 is released under a modified BSD license; the full text can be
 found
 [[https://raw.githubusercontent.com/materialsproject/atomate2/main/LICENSE][here]].
 
-** Acknowledgements
+* Acknowledgements
 :PROPERTIES:
 :CUSTOM_ID: acknowledgements
 :END:
