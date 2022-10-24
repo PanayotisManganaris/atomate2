@@ -18,6 +18,8 @@ from pathlib import Path
 
 from atomate2.vasp.drones import VaspDrone
 from jobflow import JobStore, SETTINGS
+from jobflow.utils.uuid import suuid
+from datetime import datetime
 
 from itertools import chain, zip_longest
 import multiprocessing as mp
@@ -91,21 +93,35 @@ def worker(path, eq):
     try:
         with monty.os.cd(path):
             doc = drone.assimilate()
-        update_store(store=store, taskdoc=doc)
+        data = reshape(doc) #insert metadata here if needed
+        update_store(store=store, data=data)
         #record_strings = make_training_data(doc, fdir)
         #q.put("\n".join(record_strings))
     except Exception as e:
         eq.put(traceback.format_exc())
 
-def update_store(store:JobStore, taskdoc) -> None:
+def reshape(taskdoc, metadata={})->dict:
+    """
+    reshape retroactively parsed task documents for uniformity with
+    the atomate schema
+    """
+    data = {
+        "uuid": suuid(),
+        "index": 'backfilled',
+        "output": taskdoc,
+        "completed_at": datetime.now().isoformat(),
+        "metadata": metadata,
+        # "hosts": self.hosts or [], #future jobflow
+    }
+    return data
+
+def update_store(store:JobStore, data) -> None:
     """
     input store and document, connect to store, upload document
     can be parallelized
     """
-    #TODO: automatically collect a metadata dir including a path to
-    #experiment file? or path already collected?
     with store as s:
-        s.update(taskdoc, key="output") 
+        s.update(data, key="uuid") 
 
 def grouper(it:Iterable, n, fillvalue:Any=()):
     """ extract n-size chunks of iterable """
@@ -136,9 +152,9 @@ def main_parser(paths, l, p):
 
 if __name__ == "__main__":
     from tqdm import tqdm
-
-    exp_dir = '.' #invoke script from experiment directory
-    #exp_dir = '/depot/amannodi/data/MCHP_Database/'
+    #exp_dir = '.' #invoke script from experiment directory
+    exp_dir = '/depot/amannodi/data/MCHP_Database/MAPbI_3/PBE_relax'
+    # exp_dir = '/depot/amannodi/data/MCHP_Database/'
     #exp_dir = "/depot/amannodi/data/Perovs_phases_functionals/Larger_supercell_dataset/PBE_relax"
     #data_dir = '/depot/amannodi/data/perovskite_structures_training_set'
     # data_dir = '/depot/amannodi/data/pbe_perovskite_structures'
