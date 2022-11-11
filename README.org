@@ -77,6 +77,89 @@ a2.lock is to be used for generating the atomate virtual environment.
 Here path is specified for a group-wide depot installation.
 *** modifying environment
 
+** TODO put these extras into the spec
+- phonons = ["phonopy>=1.10.8", "seekpath"]
+- mp = ["mp-api>=0.27.5"]
+- amset = ["amset>=0.4.15", "pydash"]
+- cclib = ["cclib"]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "Operating System :: OS Independent",
+    "Topic :: Other/Nonlisted Topic",
+    "Topic :: Scientific/Engineering",
+]
+
+docs = [
+    "numpydoc==1.5.0",
+    "ipython==8.6.0",
+    "FireWorks==2.0.3",
+    "autodoc_pydantic==1.8.0",
+    "jupyter-book==0.13.1",
+]
+
+dev = ["pre-commit>=2.12.1"]
+
+[project.scripts]
+atm = "atomate2.cli:cli"
+
+[project.urls]
+homepage = "https://materialsproject.github.io/atomate2/"
+repository = "https://github.com/hackingmaterials/atomate2"
+documentation = "https://materialsproject.github.io/atomate2/"
+changelog = "https://github.com/hackingmaterials/atomate2/blob/main/CHANGELOG.md"
+
+[tool.setuptools.package-data]
+atomate2 = ["py.typed"]
+"atomate2.vasp.sets" = ["*.yaml"]
+"atomate2.vasp.schemas.calc_types" = ["*.yaml"]
+
+[tool.flake8]
+max-line-length = 88
+max-doc-length = 88
+select = "C, E, F, W, B, B950"
+extend-ignore = "E203, W503, E501, F401, RST21"
+min-python-version = "3.8.0"
+docstring-convention = "numpy"
+rst-roles = "class, func, ref, obj"
+
+[tool.mypy]
+ignore_missing_imports = true
+no_strict_optional = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:.*POTCAR.*:UserWarning",
+    "ignore:.*magmom.*:UserWarning",
+    "ignore:.*is not gzipped.*:UserWarning",
+    "ignore:.*input structure.*:UserWarning",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+include = ["src/*"]
+parallel = true
+branch = true
+
+[tool.coverage.paths]
+source = ["src/"]
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+exclude_lines = [
+    '^\s*assert False(,|$)',
+    'if typing.TYPE_CHECKING:',
+    '^\s*@overload( |$)',
+]
+
 * Quick start
 :PROPERTIES:
 :CUSTOM_ID: quick-start
