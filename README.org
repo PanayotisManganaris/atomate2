@@ -52,17 +52,29 @@ It is easy to customize and compose any of the above workflows.
 :PROPERTIES:
 :CUSTOM_ID: installation
 :END:
-See [[https://materialsproject.github.io/atomate2/user/install.html][installation]] at the documentation site for basic installation
-instructions.
-** users
-Atomate2 is a Python 3.8+ library
-: pip install atomate2
-or
-: conda install atomate2
-** developers
-atomate2 has some conda dependencies. To ensure reproducibility of
-builds, development is performed within a conda virtual environment.
+This fork makes atomate2 a poetry package, ensuring reproducible
+installations.
 
+atomate2 is dependent on packages best managed through conda. Thus,
+development is performed within a conda virtual environment.
+
+install and use the [[https://pypi.org/project/conda-lock/][conda-lock]] package to install this fork.
+
+: pip install --user conda-lock
+or
+: conda install -c conda-forge conda-lock
+
+** users
+*** from source
+: git clone https://github.com/PanayotisManganaris/atomate2.git
+: cd atomate2
+: conda-lock install -n a2 -f a2.conda-lock.yaml
+
+to install fireworks as well run
+
+: conda-lock install -e fireworks -n a2 -f a2.conda-lock.yml
+
+** developers
 To ensure contributors maintain the package's reproducibility read the
 following instructions carefully.
 *** installation
@@ -76,6 +88,11 @@ a2.lock is to be used for generating the atomate virtual environment.
 
 Here path is specified for a group-wide depot installation.
 *** modifying environment
+**** install new package
+**** update existing package
+: conda-lock lock --lockfile a2.conda-lock.yml --update <package-name>
+**** resolve environment
+: conda-lock -f pyproject.toml --lockfile a2.conda-lock.yml
 
 * Quick start
 :PROPERTIES:
